@@ -1,15 +1,48 @@
 """
-GUI mejorada del Analizador Sintáctico (PyQt6)
+Módulo: enhanced_gui.py
+=======================
+Interfaz Gráfica de Usuario (GUI) mejorada para el Analizador Sintáctico.
 
-Ejecutar desde la raíz del proyecto con:
+Framework: PyQt6
+----------------
+Utiliza PyQt6 para crear una interfaz moderna y funcional con múltiples pestañas.
+
+Características Principales:
+-----------------------------
+1. **Editor de Gramáticas**: Crear y editar gramáticas interactivamente
+2. **Parser CYK**: Probar cadenas y visualizar árboles de derivación
+3. **Generador BFS**: Generar cadenas más cortas del lenguaje
+4. **Persistencia**: Cargar y guardar gramáticas en JSON
+5. **Visualización**: Árbol de parsing tanto textual como gráfico
+
+Arquitectura:
+-------------
+- MainWindow: Ventana principal con pestañas
+- TreeGraphicsView: Vista gráfica para árboles de derivación
+- Integración con módulos src/: grammar, cyk_parser, generator, etc.
+
+Estructura de Pestañas:
+------------------------
+1. **Editor de Gramática**
+   - Campos para N, T, S
+   - Lista de producciones
+   - Botones para crear/cargar/guardar
+   
+2. **Parser & Árbol**
+   - Campo de entrada para cadena
+   - Visualización textual del árbol
+   - Visualización gráfica del árbol
+   
+3. **Generador de Cadenas**
+   - Selector de cantidad
+   - Lista de cadenas generadas
+
+Ejecución:
+----------
     python -m gui.enhanced_gui
-
-La GUI importa los módulos del paquete `src`:
-    from src.grammar import Grammar
-    from src.storage import load_grammar, save_grammar
-    from src.cyk_parser import cyk_parse
-    from src.generator import generate_shortest
-    from src.tree_vis import render_tree_text
+    
+    O mejor aún, usar el launcher:
+    python run.py
 """
 
 from __future__ import annotations
@@ -29,16 +62,20 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QPainter
 
 
+# ============================================================================
+# IMPORTS DE MÓDULOS DE LÓGICA
+# ============================================================================
+# Estos módulos contienen toda la lógica de parsing, conversión CNF, etc.
+# La GUI solo actúa como interfaz para estas funcionalidades
 
-# IMPORTS from src package (requires running as module from project root)
 try:
-    from src.grammar import Grammar
-    from src.storage import load_grammar, save_grammar
-    from src.cyk_parser import cyk_parse, CYKResult
-    from src.generator import generate_shortest
-    from src.tree_vis import render_tree_text
+    from src.grammar import Grammar           # Estructura de datos de gramáticas
+    from src.storage import load_grammar, save_grammar  # Persistencia JSON
+    from src.cyk_parser import cyk_parse, CYKResult    # Algoritmo CYK
+    from src.generator import generate_shortest        # Generador BFS
+    from src.tree_vis import render_tree_text          # Visualización textual
 except Exception as e:
-    # If imports fail, give a helpful message
+    # Si los imports fallan, dar mensaje útil
     msg = (
         "Error importando módulos desde 'src'. Asegúrate de ejecutar la GUI "
         "desde la raíz del proyecto con: python -m gui.enhanced_gui\n\n"
@@ -47,10 +84,17 @@ except Exception as e:
     raise ImportError(msg)
 
 
-# -------------------------
-# Helper: validate grammar fields
-# -------------------------
+# ============================================================================
+# FUNCIÓN AUXILIAR: Validación de Campos de Gramática
+# ============================================================================
 def validate_grammar_fields(N_text: str, T_text: str, productions_text: str, S_text: str) -> Tuple[bool, str]:
+    """
+    Valida que todos los campos necesarios para crear una gramática estén presentes.
+    
+    Retorna:
+        (True, "") si todo es válido
+        (False, mensaje_error) si falta algún campo
+    """
     if not N_text.strip():
         return False, "Debe especificar al menos un No terminal (N)."
     if not T_text.strip():
@@ -62,25 +106,51 @@ def validate_grammar_fields(N_text: str, T_text: str, productions_text: str, S_t
     return True, ""
 
 
-# -------------------------
-# Graphics: draw parse tree in QGraphicsScene
-# -------------------------
+# ============================================================================
+# CLASE: TreeGraphicsView - Visualización Gráfica de Árboles
+# ============================================================================
 class TreeGraphicsView(QGraphicsView):
+    """
+    Widget personalizado para dibujar árboles de derivación de forma gráfica.
+    
+    Utiliza QGraphicsScene para crear una representación visual del árbol
+    con círculos para nodos y líneas para conexiones.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Configuración de rendering para calidad visual
         self.setRenderHints(self.renderHints() | QPainter.RenderHint.Antialiasing)
+        
+        # Escena donde se dibujan los elementos gráficos
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
-        self.node_radius = 28
-        self.h_spacing = 18
-        self.v_spacing = 60
+        
+        # Parámetros de diseño del árbol
+        self.node_radius = 28      # Radio de los círculos de nodos
+        self.h_spacing = 18        # Espaciado horizontal entre nodos
+        self.v_spacing = 60        # Espaciado vertical entre niveles
         self.font = QFont("Arial", 10)
 
     def clear_scene(self):
+        """Limpia todos los elementos gráficos de la escena."""
         self.scene.clear()
 
     def draw_tree(self, tree):
-        """Dibuja el árbol de derivación de forma segura y sin errores."""
+        """
+        Dibuja el árbol de derivación completo en la escena gráfica.
+        
+        Parámetros:
+        -----------
+        tree : tuple
+            Árbol en formato de tuplas anidadas retornado por CYK
+            
+        Algoritmo:
+        ----------
+        1. Normalizar el árbol a formato uniforme de tuplas
+        2. Dibujar recursivamente cada nodo como círculo
+        3. Conectar nodos padre-hijo con líneas
+        4. Ajustar vista automáticamente al contenido
+        """
         self.scene.clear()
         if not tree:
             return
@@ -89,6 +159,7 @@ class TreeGraphicsView(QGraphicsView):
 
         # Normaliza el árbol: convierte cualquier str o lista a tupla uniforme
         def normalize(node):
+            """Convierte diferentes formatos de nodo a tupla estándar."""
             if isinstance(node, str):
                 return (node,)
             if isinstance(node, (list, tuple)):
@@ -99,18 +170,20 @@ class TreeGraphicsView(QGraphicsView):
 
         tree = normalize(tree)
 
-        # Dibuja el árbol recursivamente
+        # Función recursiva para dibujar cada nodo y sus hijos
         def draw_node(node, x, y, depth=0):
+            """Dibuja un nodo y recursivamente sus hijos."""
             r = self.node_radius
             symbol = node[0] if isinstance(node, (tuple, list)) else str(node)
             children = node[1:] if isinstance(node, (tuple, list)) and len(node) > 1 else []
 
-            # Dibujar nodo actual
+            # Dibujar círculo del nodo actual
             ellipse = QGraphicsEllipseItem(x - r, y - r, 2*r, 2*r)
-            ellipse.setBrush(QColor(230, 240, 255))
-            ellipse.setPen(QColor(0, 0, 80))
+            ellipse.setBrush(QColor(230, 240, 255))  # Color de fondo
+            ellipse.setPen(QColor(0, 0, 80))          # Color del borde
             self.scene.addItem(ellipse)
 
+            # Dibujar texto del símbolo centrado en el círculo
             text = QGraphicsTextItem(str(symbol))
             text.setFont(self.font)
             text.setDefaultTextColor(QColor(10, 10, 10))
@@ -118,54 +191,66 @@ class TreeGraphicsView(QGraphicsView):
             self.scene.addItem(text)
 
             if not children:
-                return
+                return  # Nodo hoja, terminar
 
-            # Distribuye los hijos horizontalmente
+            # Distribuir hijos horizontalmente
             total_width = len(children) * (self.node_radius * 3)
             start_x = x - total_width / 2
             child_y = y + self.v_spacing
 
+            # Dibujar cada hijo y línea de conexión
             for i, ch in enumerate(children):
                 child_x = start_x + i * (self.node_radius * 3)
+                # Línea desde nodo actual a hijo
                 line = QGraphicsLineItem(x, y + r, child_x, child_y - r)
                 self.scene.addItem(line)
+                # Recursión para dibujar subárbol
                 draw_node(ch, child_x, child_y, depth + 1)
 
-        # Dibujar desde el nodo raíz
+        # Iniciar dibujado desde la raíz
         draw_node(tree, 0, 0)
 
-        # Ajustar vista automáticamente
+        # Ajustar vista para mostrar todo el árbol
         self.setSceneRect(self.scene.itemsBoundingRect())
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-# -------------------------
-# Main Window
-# -------------------------
+# ============================================================================
+# CLASE PRINCIPAL: MainWindow
+# ============================================================================
 class MainWindow(QMainWindow):
+    """
+    Ventana principal de la aplicación GUI.
+    
+    Gestiona las tres pestañas principales y coordina la interacción
+    entre la interfaz y los módulos de lógica.
+    """
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Analizador Sintáctico - GUI Mejorada")
         self.setMinimumSize(1000, 700)
 
-        # Central widget: Tabbed interface
+        # Widget central: interfaz con pestañas
         tabs = QTabWidget()
         tabs.addTab(self.grammar_editor_tab(), "Editor de Gramática")
         tabs.addTab(self.parser_tab(), "Parser & Árbol")
         tabs.addTab(self.generator_tab(), "Generador de Cadenas")
         self.setCentralWidget(tabs)
 
-        # Attributes
-        self.current_grammar: Optional[Grammar] = None
-        self.last_loaded_path: Optional[str] = None
+        # Atributos de estado de la aplicación
+        self.current_grammar: Optional[Grammar] = None  # Gramática actualmente cargada
+        self.last_loaded_path: Optional[str] = None     # Última ruta de archivo usado
 
-        # Menu
+        # Crear menú
         self._create_menu()
 
-    # -------------------------
-    # Menu bar
-    # -------------------------
+    # ========================================================================
+    # MENÚ SUPERIOR
+    # ========================================================================
     def _create_menu(self):
+        """Crea la barra de menú con opciones Archivo y Ayuda."""
         menubar = self.menuBar()
+        
+        # Menú Archivo
         file_menu = menubar.addMenu("&Archivo")
 
         load_act = QAction("Cargar Gramática", self)
@@ -180,20 +265,31 @@ class MainWindow(QMainWindow):
         exit_act.triggered.connect(self.close)
         file_menu.addAction(exit_act)
 
+        # Menú Ayuda
         help_menu = menubar.addMenu("&Ayuda")
         about_act = QAction("Acerca de", self)
         about_act.triggered.connect(lambda: QMessageBox.information(self, "Acerca de",
                                                                      "Analizador Sintáctico - GUI Mejorada\nProyecto Lenguajes Formales"))
         help_menu.addAction(about_act)
 
-    # -------------------------
-    # Tab: Grammar Editor
-    # -------------------------
+    # ========================================================================
+    # PESTAÑA 1: EDITOR DE GRAMÁTICA
+    # ========================================================================
     def grammar_editor_tab(self) -> QWidget:
+        """
+        Crea la pestaña del editor de gramáticas.
+        
+        Permite al usuario:
+        - Ingresar N, T, S
+        - Agregar producciones interactivamente
+        - Crear gramática en memoria
+        - Cargar/guardar desde archivos
+        """
         w = QWidget()
         layout = QVBoxLayout()
         w.setLayout(layout)
 
+        # Formulario para N, T, S
         form = QFormLayout()
 
         self.input_N = QLineEdit()
@@ -269,10 +365,11 @@ class MainWindow(QMainWindow):
         return w
 
     def add_production(self):
+        """Agrega producción(es) a la lista, soportando alternativas con |"""
         text = self.production_editor.text().strip()
         if not text:
             return
-        # Allow multiple alternatives separated by '|'
+        # Soporta múltiples alternativas: S -> a | b se expande a dos producciones
         if '|' in text:
             left, rest = text.split('->') if '->' in text else text.split('→')
             left = left.strip()
@@ -286,6 +383,7 @@ class MainWindow(QMainWindow):
         self.production_editor.clear()
 
     def remove_selected_production(self):
+        """Elimina la producción seleccionada de la lista."""
         sel = self.productions_list.selectedItems()
         if not sel:
             return
@@ -294,20 +392,38 @@ class MainWindow(QMainWindow):
             self.productions_list.takeItem(row)
 
     def clear_productions(self):
+        """Limpia toda la lista de producciones."""
         self.productions_list.clear()
 
     def create_grammar_from_fields(self):
+        """
+        Crea objeto Grammar desde los campos del formulario.
+        
+        Proceso:
+        --------
+        1. Recolectar datos de los campos de texto
+        2. Validar que todos los campos necesarios estén presentes
+        3. Parsear listas separadas por comas (N, T)
+        4. Construir Grammar usando Grammar.from_text()
+        5. Actualizar estado de la aplicación
+        """
         N_text = self.input_N.text()
         T_text = self.input_T.text()
         productions = [self.productions_list.item(i).text() for i in range(self.productions_list.count())]
         S_text = self.input_S.text()
+        
+        # Validar campos
         ok, msg = validate_grammar_fields(N_text, T_text, "\n".join(productions), S_text)
         if not ok:
             QMessageBox.warning(self, "Validación", msg)
             return
+        
+        # Parsear listas
         N = [x.strip() for x in N_text.split(",") if x.strip()]
         T = [x.strip() for x in T_text.split(",") if x.strip()]
         gtype = '2' if self.combo_type.currentIndex() == 0 else '3'
+        
+        # Crear gramática
         try:
             g = Grammar.from_text(N, T, productions, S_text, gtype)
             self.current_grammar = g
@@ -316,10 +432,18 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo crear la gramática: {e}")
 
-    # -------------------------
-    # Tab: Parser & Tree
-    # -------------------------
+    # ========================================================================
+    # PESTAÑA 2: PARSER CYK Y VISUALIZACIÓN DE ÁRBOL
+    # ========================================================================
     def parser_tab(self) -> QWidget:
+        """
+        Crea la pestaña del parser.
+        
+        Componentes:
+        - Campo de entrada para cadena
+        - Vista textual del árbol de derivación
+        - Vista gráfica del árbol de derivación
+        """
         w = QWidget()
         layout = QVBoxLayout()
         w.setLayout(layout)
@@ -364,32 +488,57 @@ class MainWindow(QMainWindow):
         return w
 
     def run_parse(self):
+        """
+        Ejecuta el algoritmo CYK sobre la cadena ingresada.
+        
+        Proceso:
+        --------
+        1. Verificar que hay gramática cargada
+        2. Obtener cadena de entrada
+        3. Tokenizar apropiadamente (considerando terminales multi-carácter)
+        4. Ejecutar CYK (que internamente convierte a CNF)
+        5. Mostrar resultado: ACEPTADA/RECHAZADA
+        6. Si es aceptada, visualizar árbol (textual y gráfico)
+        
+        Tokenización:
+        -------------
+        - Si terminales son de un carácter: split por caracteres
+        - Si hay terminales multi-carácter: split por espacios
+        """
         if not self.current_grammar:
             QMessageBox.warning(self, "Sin gramática", "Primero crea o carga una gramática.")
             return
+        
         s = self.input_string.text().strip()
-        # For safety: if grammar terminals are multi-character tokens, the UI expects chars; user can input tokens separated by spaces.
-        # Try: if terminals contain any multi-char element, split on spaces, else split into chars.
+        
+        # Determinar estrategia de tokenización basado en los terminales
         T = self.current_grammar.T
         multi = any(len(t) > 1 for t in T)
+        
         if multi:
+            # Terminales multi-carácter: usuario debe separar con espacios
             if s.strip() == "":
                 tokens = []
             else:
                 tokens = s.split()
         else:
+            # Terminales simples: cada carácter es un token
             tokens = list(s)
-        # Run CYK
+        
+        # Ejecutar algoritmo CYK
         try:
             res: CYKResult = cyk_parse(self.current_grammar, tokens)
         except Exception as e:
             QMessageBox.critical(self, "Error en parser", f"Excepción durante CYK: {e}")
             return
+        
+        # Mostrar resultado
         if res.accepted:
             self.lab_result.setText("Resultado: ACEPTADA ✅")
             if res.parse_tree:
+                # Visualización textual
                 self.text_tree.setPlainText(render_tree_text(res.parse_tree))
-                # draw graphical tree
+                # Visualización gráfica
                 try:
                     self.tree_view.draw_tree(res.parse_tree)
                 except Exception as e:
@@ -399,10 +548,11 @@ class MainWindow(QMainWindow):
             self.text_tree.clear()
             self.tree_view.clear_scene()
 
-    # -------------------------
-    # Tab: Generator
-    # -------------------------
+    # ========================================================================
+    # PESTAÑA 3: GENERADOR DE CADENAS
+    # ========================================================================
     def generator_tab(self) -> QWidget:
+        """Crea la pestaña del generador BFS de cadenas."""
         w = QWidget()
         layout = QVBoxLayout()
         w.setLayout(layout)
@@ -425,66 +575,103 @@ class MainWindow(QMainWindow):
         return w
 
     def run_generate(self):
+        """
+        Ejecuta el generador BFS para producir las N cadenas más cortas.
+        
+        Integración con generador:
+        - Usa el módulo generator.generate_shortest()
+        - Muestra resultados en lista numerada
+        """
         if not self.current_grammar:
             QMessageBox.warning(self, "Sin gramática", "Primero crea o carga una gramática.")
             return
+        
         limit = self.spin_limit.value()
+        
+        # Llamar al generador BFS
         try:
             gens = generate_shortest(self.current_grammar, limit=limit)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Excepción al generar: {e}")
             return
+        
+        # Mostrar resultados
         self.list_generated.clear()
         for i, s in enumerate(gens, 1):
             item = QListWidgetItem(f"{i}. {s!r}")
             self.list_generated.addItem(item)
+        
         if not gens:
             QMessageBox.information(self, "Generador", "No se encontraron cadenas dentro de los límites definidos.")
 
-    # -------------------------
-    # Menu actions: load / save
-    # -------------------------
+    # ========================================================================
+    # OPERACIONES DEL MENÚ: Cargar y Guardar
+    # ========================================================================
     def menu_load(self):
+        """
+        Carga gramática desde archivo JSON.
+        
+        Integración con storage:
+        - Usa load_grammar() del módulo storage
+        - Actualiza todos los campos del editor con la gramática cargada
+        - Maneja errores de archivo/formato
+        """
         path, _ = QFileDialog.getOpenFileName(self, "Cargar Gramática (JSON)", "", "JSON Files (*.json);;All Files (*)")
         if not path:
             return
+        
         try:
             g = load_grammar(path)
             self.current_grammar = g
             self.last_loaded_path = path
-            # fill fields
+            
+            # Rellenar campos del editor con la gramática cargada
             self.input_N.setText(", ".join(sorted(list(g.N))))
             self.input_T.setText(", ".join(sorted(list(g.T))))
             self.input_S.setText(g.S)
-            # productions list
+            
+            # Rellenar lista de producciones
             self.productions_list.clear()
             for A, rhss in g.P.items():
                 for rhs in rhss:
                     self.productions_list.addItem(f"{A} -> {' '.join(rhs)}")
-            # type
+            
+            # Establecer tipo de gramática
             if g.gtype == '3':
                 self.combo_type.setCurrentIndex(1)
             else:
                 self.combo_type.setCurrentIndex(0)
+            
             self.lab_status.setText(f"Estado: gramática cargada desde {os.path.basename(path)}")
             QMessageBox.information(self, "Cargado", f"Gramática cargada: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo cargar la gramática: {e}")
 
     def menu_save(self):
+        """
+        Guarda gramática actual en archivo JSON.
+        
+        Integración con storage:
+        - Usa save_grammar() del módulo storage
+        - Sugiere última ruta usada como default
+        - Maneja errores de escritura
+        """
         if not self.current_grammar:
-            # try to build from fields
+            # Si no hay gramática, intentar crearla desde los campos
             self.create_grammar_from_fields()
             if not self.current_grammar:
                 return
-        # propose last_loaded_path or ask for new
+        
+        # Proponer ruta default
         if self.last_loaded_path:
             default = self.last_loaded_path
         else:
             default = os.path.join(os.getcwd(), "grammar.json")
+        
         path, _ = QFileDialog.getSaveFileName(self, "Guardar Gramática (JSON)", default, "JSON Files (*.json);;All Files (*)")
         if not path:
             return
+        
         try:
             save_grammar(self.current_grammar, path)
             self.last_loaded_path = path
@@ -494,10 +681,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"No se pudo guardar: {e}")
 
 
-# -------------------------
-# Entrypoint
-# -------------------------
+# ============================================================================
+# PUNTO DE ENTRADA DE LA GUI
+# ============================================================================
 def main():
+    """Función principal que inicia la aplicación GUI."""
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
