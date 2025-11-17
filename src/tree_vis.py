@@ -2,9 +2,11 @@
 Módulo: tree_vis.py - Visualización de árboles de derivación
 =============================================================
 Convierte árboles en formato tupla a representación textual con indentación.
+Oculta nodos T_X intermedios creados por la conversión CNF.
 """
 
 from typing import Tuple, Any
+import re
 
 
 def render_tree_text(node: Tuple[Any, ...], indent: int = 0) -> str:
@@ -17,6 +19,24 @@ def render_tree_text(node: Tuple[Any, ...], indent: int = 0) -> str:
     # Calcular indentación: 2 espacios por cada nivel
     # Ejemplo: indent=0 → "", indent=1 → "  ", indent=2 → "    "
     pad = "  " * indent
+    
+    # =======================================================================
+    # VERIFICAR SI ES NODO T_X INTERMEDIO (creado por CNF)
+    # =======================================================================
+    # Los nodos T_0, T_1, etc. son artefactos de la conversión a CNF
+    # Deben ser "transparentes" en la visualización
+    
+    if isinstance(node, (tuple, list)) and len(node) >= 1:
+        symbol = node[0]
+        
+        # Si el símbolo es T_X (patrón: T_0, T_1, T_2, ...)
+        if isinstance(symbol, str) and re.match(r'^T_\d+$', symbol):
+            # Si T_X tiene exactamente un hijo, "saltar" este nodo
+            # y mostrar directamente el hijo
+            if len(node) == 2:
+                # Renderizar el hijo con la misma indentación
+                # (no aumentamos indent porque estamos ocultando este nivel)
+                return render_tree_text(node[1], indent)
     
     # =======================================================================
     # CASO 1: Nodo hoja (terminal)

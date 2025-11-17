@@ -113,23 +113,44 @@ class TreeGraphicsView(QGraphicsView):
     """
     Widget personalizado para dibujar árboles de derivación de forma gráfica.
     
-    Utiliza QGraphicsScene para crear una representación visual del árbol
-    con círculos para nodos y líneas para conexiones.
+    Mejoras visuales:
+    - Círculos con gradientes y sombras
+    - Líneas curvas entre nodos
+    - Colores diferentes para terminales y no terminales
+    - Diseño balanceado automáticamente
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         # Configuración de rendering para calidad visual
+        # Antialiasing: suaviza bordes de círculos y líneas
         self.setRenderHints(self.renderHints() | QPainter.RenderHint.Antialiasing)
         
         # Escena donde se dibujan los elementos gráficos
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
         
-        # Parámetros de diseño del árbol
-        self.node_radius = 28      # Radio de los círculos de nodos
-        self.h_spacing = 18        # Espaciado horizontal entre nodos
-        self.v_spacing = 60        # Espaciado vertical entre niveles
-        self.font = QFont("Arial", 10)
+        # =================================================================
+        # PARÁMETROS DE DISEÑO DEL ÁRBOL (ajustados para mejor apariencia)
+        # =================================================================
+        self.node_radius = 30       # Radio de los círculos (aumentado)
+        self.h_spacing = 80         # Espaciado horizontal entre hermanos (aumentado)
+        self.v_spacing = 90         # Espaciado vertical entre niveles (aumentado)
+        
+        # Fuentes para símbolos (más grande y negrita)
+        self.font_nt = QFont("Arial", 12, QFont.Weight.Bold)  # No terminales
+        self.font_t = QFont("Arial", 11)                       # Terminales
+        
+        # Colores para diferentes tipos de nodos
+        # No terminales: azul suave
+        self.color_nt_bg = QColor(135, 206, 250)       # Fondo celeste
+        self.color_nt_border = QColor(0, 100, 200)     # Borde azul oscuro
+        
+        # Terminales: verde suave
+        self.color_t_bg = QColor(144, 238, 144)        # Fondo verde claro
+        self.color_t_border = QColor(34, 139, 34)      # Borde verde oscuro
+        
+        # Color de líneas
+        self.color_line = QColor(100, 100, 100)        # Gris medio
 
     def clear_scene(self):
         """Limpia todos los elementos gráficos de la escena."""
@@ -143,76 +164,322 @@ class TreeGraphicsView(QGraphicsView):
         -----------
         tree : tuple
             Árbol en formato de tuplas anidadas retornado por CYK
+            Formato: (símbolo, hijo1, hijo2, ...)
+            Hoja terminal: (no_terminal, 'terminal')
             
         Algoritmo:
         ----------
         1. Normalizar el árbol a formato uniforme de tuplas
-        2. Dibujar recursivamente cada nodo como círculo
-        3. Conectar nodos padre-hijo con líneas
-        4. Ajustar vista automáticamente al contenido
+        2. Calcular anchos necesarios para cada subárbol (bottom-up)
+        3. Dibujar recursivamente cada nodo con posición calculada
+        4. Conectar nodos padre-hijo con líneas curvas
+        5. Ajustar vista automáticamente al contenido
         """
+        # Limpiar escena anterior
         self.scene.clear()
+        
+        # Si no hay árbol, no dibujar nada
         if not tree:
             return
 
-        from PyQt6.QtGui import QPainter
+        from PyQt6.QtGui import QPainter, QPen, QBrush, QRadialGradient
+        import re
 
-        # Normaliza el árbol: convierte cualquier str o lista a tupla uniforme
+        # =================================================================
+        # FUNCIÓN 1: Normalizar el árbol a formato estándar
+        # =================================================================
         def normalize(node):
-            """Convierte diferentes formatos de nodo a tupla estándar."""
+            """
+            Convierte diferentes formatos de nodo a tupla estándar.
+            - String solo: ('A',)
+            - Tupla con hijos: ('A', hijo1, hijo2)
+            """
+            # Si es string, convertir a tupla de un elemento
             if isinstance(node, str):
                 return (node,)
+            
+            # Si es lista o tupla, normalizar recursivamente
             if isinstance(node, (list, tuple)):
+                # Normalizar cada hijo recursivamente
                 normalized_children = [normalize(ch) for ch in node[1:]] if len(node) > 1 else []
+                
+                # Asegurar que el símbolo sea string
                 head = node[0] if isinstance(node[0], str) else str(node[0])
+                
+                # Retornar tupla: (símbolo, hijo1, hijo2, ...)
                 return tuple([head] + normalized_children)
+            
+            # Caso por defecto: convertir a string y envolver en tupla
             return (str(node),)
 
+        # Normalizar árbol completo
         tree = normalize(tree)
+        
+        # =================================================================
+        # FUNCIÓN 1.5: Simplificar árbol eliminando nodos T_X intermedios
+        # =================================================================
+        def simplify_tree(node):
+            """
+            Elimina nodos intermedios T_0, T_1, etc. creados por CNF.
+            
+            Estos nodos son artefactos de la conversión a Forma Normal de Chomsky
+            donde cada terminal en una producción larga se reemplaza por T_X -> terminal.
+            
+            Ejemplo:
+            Antes: ('A', ('T_0', 'a'), ('B', ...))
+            Después: ('A', 'a', ('B', ...))
+            
+            Algoritmo:
+            - Si el nodo es T_X con un solo hijo terminal, retornar el terminal
+            - Si no, simplificar recursivamente cada hijo
+            """
+            # Extraer símbolo y lista de hijos
+            if not isinstance(node, (tuple, list)):
+                return node
+            
+            symbol = node[0] if len(node) > 0 else ""
+            children = list(node[1:]) if len(node) > 1 else []
+            
+            # CASO ESPECIAL: Nodo T_X con un solo hijo que es terminal
+            # Patrón: símbolo es T_0, T_1, T_2, etc. (generados por CNF)
+            if re.match(r'^T_\d+$', str(symbol)) and len(children) == 1:
+                # Verificar si el hijo es un terminal (string simple)
+                child = children[0]
+                
+                # Si el hijo es una tupla de un elemento (terminal), devolver el string
+                if isinstance(child, (tuple, list)) and len(child) == 1:
+                    return child[0]
+                
+                # Si el hijo ya es string, devolverlo directamente
+                if isinstance(child, str):
+                    return child
+                
+                # Si tiene estructura (X, 'a'), devolver solo 'a'
+                if isinstance(child, (tuple, list)) and len(child) == 2:
+                    if isinstance(child[1], str):
+                        return child[1]
+            
+            # CASO NORMAL: simplificar recursivamente cada hijo
+            simplified_children = []
+            for child in children:
+                simplified = simplify_tree(child)
+                simplified_children.append(simplified)
+            
+            # Retornar nodo con hijos simplificados
+            return tuple([symbol] + simplified_children)
+        
+        # Simplificar el árbol para eliminar nodos T_X
+        tree = simplify_tree(tree)
 
-        # Función recursiva para dibujar cada nodo y sus hijos
-        def draw_node(node, x, y, depth=0):
-            """Dibuja un nodo y recursivamente sus hijos."""
-            r = self.node_radius
+        # =================================================================
+        # FUNCIÓN 2: Calcular ancho necesario para cada subárbol
+        # =================================================================
+        def compute_width(node):
+            """
+            Calcula el ancho horizontal necesario para dibujar un subárbol.
+            Retorna: ancho en píxeles
+            
+            Algoritmo:
+            - Nodo hoja: ancho = diámetro del círculo
+            - Nodo interno: ancho = suma de anchos de hijos + espaciado
+            """
+            # Obtener símbolo y lista de hijos
             symbol = node[0] if isinstance(node, (tuple, list)) else str(node)
             children = node[1:] if isinstance(node, (tuple, list)) and len(node) > 1 else []
-
-            # Dibujar círculo del nodo actual
-            ellipse = QGraphicsEllipseItem(x - r, y - r, 2*r, 2*r)
-            ellipse.setBrush(QColor(230, 240, 255))  # Color de fondo
-            ellipse.setPen(QColor(0, 0, 80))          # Color del borde
-            self.scene.addItem(ellipse)
-
-            # Dibujar texto del símbolo centrado en el círculo
-            text = QGraphicsTextItem(str(symbol))
-            text.setFont(self.font)
-            text.setDefaultTextColor(QColor(10, 10, 10))
-            text.setPos(x - text.boundingRect().width() / 2, y - text.boundingRect().height() / 2)
-            self.scene.addItem(text)
-
+            
+            # CASO 1: Nodo hoja (no tiene hijos)
             if not children:
-                return  # Nodo hoja, terminar
+                # Ancho mínimo = diámetro del círculo
+                return 2 * self.node_radius
+            
+            # CASO 2: Nodo interno (tiene hijos)
+            # Calcular recursivamente ancho de cada hijo
+            child_widths = [compute_width(ch) for ch in children]
+            
+            # Ancho total = suma de anchos de hijos + espaciado entre ellos
+            # Espaciado: (n-1) * h_spacing donde n = número de hijos
+            total_width = sum(child_widths) + (len(children) - 1) * self.h_spacing
+            
+            # El ancho debe ser al menos el del nodo actual
+            return max(total_width, 2 * self.node_radius)
 
-            # Distribuir hijos horizontalmente
-            total_width = len(children) * (self.node_radius * 3)
-            start_x = x - total_width / 2
+        # =================================================================
+        # FUNCIÓN 3: Determinar si un nodo es terminal
+        # =================================================================
+        def is_terminal(node):
+            """
+            Determina si un nodo representa un terminal.
+            Formato de terminal: (no_terminal, 'terminal')
+            Ejemplo: ('A', 'a')
+            """
+            # Verificar: exactamente 2 elementos Y segundo es string
+            if isinstance(node, (tuple, list)) and len(node) == 2:
+                # Segundo elemento debe ser string (el terminal)
+                return isinstance(node[1], str)
+            return False
+
+        def display_symbol(node):
+            """Retorna la etiqueta visible del nodo evitando mostrar T_i auxiliares."""
+            symbol = node[0] if isinstance(node, (tuple, list)) else str(node)
+            if is_terminal(node):
+                terminal = node[1]
+                if isinstance(symbol, str) and symbol.startswith("T_"):
+                    return terminal
+            return symbol
+
+        # =================================================================
+        # FUNCIÓN 4: Dibujar un nodo y sus hijos recursivamente
+        # =================================================================
+        def draw_node(node, x, y, width, depth=0):
+            """
+            Dibuja un nodo y recursivamente todos sus hijos.
+            
+            Parámetros:
+            - node: tupla del nodo actual
+            - x: posición x del centro del nodo
+            - y: posición y del centro del nodo
+            - width: ancho disponible para este subárbol
+            - depth: profundidad en el árbol (0 = raíz)
+            """
+            # Radio del círculo
+            r = self.node_radius
+            
+            # Extraer símbolo del nodo
+            symbol = node[0] if isinstance(node, (tuple, list)) else str(node)
+            visible_symbol = display_symbol(node)
+            
+            # Extraer lista de hijos
+            children = node[1:] if isinstance(node, (tuple, list)) and len(node) > 1 else []
+            
+            # Determinar si es terminal para elegir colores
+            is_term = is_terminal(node)
+            
+            # -------------------------------------------------------------
+            # DIBUJAR CÍRCULO DEL NODO CON GRADIENTE
+            # -------------------------------------------------------------
+            # Crear círculo (elipse con ancho = alto)
+            ellipse = QGraphicsEllipseItem(x - r, y - r, 2*r, 2*r)
+            
+            # Aplicar gradiente radial para efecto 3D
+            gradient = QRadialGradient(x - r/3, y - r/3, r * 1.8)
+            
+            if is_term:
+                # Terminal: gradiente verde
+                gradient.setColorAt(0, QColor(200, 255, 200))  # Centro más claro
+                gradient.setColorAt(1, self.color_t_bg)         # Borde color base
+                ellipse.setPen(QPen(self.color_t_border, 2))   # Borde verde
+            else:
+                # No terminal: gradiente azul
+                gradient.setColorAt(0, QColor(220, 240, 255))  # Centro más claro
+                gradient.setColorAt(1, self.color_nt_bg)        # Borde color base
+                ellipse.setPen(QPen(self.color_nt_border, 2))  # Borde azul
+            
+            # Aplicar el gradiente como brush (relleno)
+            ellipse.setBrush(QBrush(gradient))
+            
+            # Agregar círculo a la escena
+            self.scene.addItem(ellipse)
+            
+            # -------------------------------------------------------------
+            # DIBUJAR TEXTO DEL SÍMBOLO CENTRADO
+            # -------------------------------------------------------------
+            text = QGraphicsTextItem(str(visible_symbol))
+            
+            # Aplicar fuente según tipo
+            text.setFont(self.font_nt if not is_term else self.font_t)
+            
+            # Color del texto: negro
+            text.setDefaultTextColor(QColor(0, 0, 0))
+            
+            # Centrar texto en el círculo
+            # boundingRect(): rectángulo que contiene el texto
+            text_rect = text.boundingRect()
+            text.setPos(x - text_rect.width() / 2, y - text_rect.height() / 2)
+            
+            # Agregar texto a la escena
+            self.scene.addItem(text)
+            
+            # -------------------------------------------------------------
+            # SI NO HAY HIJOS, TERMINAR (nodo hoja)
+            # -------------------------------------------------------------
+            if not children:
+                return
+            
+            # -------------------------------------------------------------
+            # CALCULAR POSICIONES DE LOS HIJOS
+            # -------------------------------------------------------------
+            # Calcular ancho de cada hijo
+            child_widths = [compute_width(ch) for ch in children]
+            
+            # Posición y de los hijos (un nivel más abajo)
             child_y = y + self.v_spacing
-
-            # Dibujar cada hijo y línea de conexión
+            
+            # Calcular posición x inicial (lado izquierdo)
+            total_children_width = sum(child_widths) + (len(children) - 1) * self.h_spacing
+            current_x = x - total_children_width / 2
+            
+            # -------------------------------------------------------------
+            # DIBUJAR CADA HIJO Y SU LÍNEA DE CONEXIÓN
+            # -------------------------------------------------------------
             for i, ch in enumerate(children):
-                child_x = start_x + i * (self.node_radius * 3)
-                # Línea desde nodo actual a hijo
-                line = QGraphicsLineItem(x, y + r, child_x, child_y - r)
-                self.scene.addItem(line)
-                # Recursión para dibujar subárbol
-                draw_node(ch, child_x, child_y, depth + 1)
+                # Ancho del hijo actual
+                ch_width = child_widths[i]
+                
+                # Posición x del centro del hijo
+                child_x = current_x + ch_width / 2
+                
+                # ---------------------------------------------------------
+                # DIBUJAR LÍNEA CURVA DESDE PADRE A HIJO
+                # ---------------------------------------------------------
+                # Crear path para línea curva (Bézier)
+                path = QPainterPath()
+                
+                # Punto inicial: borde inferior del círculo padre
+                path.moveTo(x, y + r)
+                
+                # Punto de control para curva (punto medio vertical)
+                control_y = (y + r + child_y - r) / 2
+                
+                # Curva cuadrática: desde padre hasta hijo
+                # quadTo(control_x, control_y, end_x, end_y)
+                path.quadTo(x, control_y, child_x, child_y - r)
+                
+                # Crear item gráfico desde el path
+                line_item = self.scene.addPath(path, QPen(self.color_line, 2))
+                
+                # ---------------------------------------------------------
+                # LLAMADA RECURSIVA: dibujar subárbol del hijo
+                # ---------------------------------------------------------
+                draw_node(ch, child_x, child_y, ch_width, depth + 1)
+                
+                # Avanzar posición x para el siguiente hijo
+                # Sumar: ancho del hijo actual + espaciado
+                current_x += ch_width + self.h_spacing
 
-        # Iniciar dibujado desde la raíz
-        draw_node(tree, 0, 0)
-
-        # Ajustar vista para mostrar todo el árbol
-        self.setSceneRect(self.scene.itemsBoundingRect())
-        self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # =================================================================
+        # INICIAR DIBUJADO DESDE LA RAÍZ
+        # =================================================================
+        # Calcular ancho total necesario para el árbol
+        total_width = compute_width(tree)
+        
+        # Dibujar desde la raíz en posición (0, 0)
+        draw_node(tree, 0, 0, total_width)
+        
+        # =================================================================
+        # AJUSTAR VISTA PARA MOSTRAR TODO EL ÁRBOL
+        # =================================================================
+        # Calcular rectángulo que contiene todos los elementos
+        bounding = self.scene.itemsBoundingRect()
+        
+        # Agregar márgenes (10% en cada lado)
+        margin = max(bounding.width(), bounding.height()) * 0.1
+        bounding.adjust(-margin, -margin, margin, margin)
+        
+        # Establecer rectángulo de la escena
+        self.setSceneRect(bounding)
+        
+        # Ajustar vista para mostrar todo (manteniendo aspect ratio)
+        self.fitInView(bounding, Qt.AspectRatioMode.KeepAspectRatio)
 
 # ============================================================================
 # CLASE PRINCIPAL: MainWindow
